@@ -1,0 +1,381 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#define max(x, y) (((x) > (y)) ? (x) : (y)) //Pentru Maximul dintre 2 Numere
+#define min(x, y) (((x) < (y)) ? (x) : (y)) //Pentru Minimul dintre 2 Numere
+typedef unsigned int ui;
+typedef unsigned char uc;
+
+//Punct 1: XORSHIFT32
+ui *XORSHIFT32(ui w, ui h, ui seed) //Creeaza Vectorul cu Numere Generate Aleator
+//Parametrii: Inaltimea si Lungimea Imaginii, Cheia Secreta
+{
+    ui i, n=2*w*h, x=seed;
+    //Seed=cheia de criptare
+    ui *r=(ui*)malloc(n*sizeof(ui)); //Vectorul declarat Dinamic
+    r[0]=x; //Primul Element al Vectorului este "seed"=cheia secreta
+    for(i=1; i<n; i++) //Generam restul numerelor
+    {
+        x=x^(x<<13);
+        x=x^(x>>17);
+        x=x^(x<<5);
+        r[i]=x;
+    }
+    return r; //Returnam Vectorul
+}
+
+//Punct 2: Liniarizare Imagine
+typedef struct //Structura Pixel cu 3 Octeti de Culoare
+//little-endian: (inversat) BGR
+{
+    uc B;
+    uc G;
+    uc R;
+}Pixel;
+//Functia care Liniarizeaza o Imagine Sursa
+Pixel *liniarizare(char *sursa)
+{
+    Pixel *L, aux; //Vectorul de Liniarizare cu Pixeli
+    ui w, h, padding, i, j, z, n;
+
+    FILE *f=fopen(sursa, "rb"); //Deschid Fisierul
+    if(f==NULL)
+    {printf("Nu am gasit Imaginea. Eroare."); return 0;}
+
+    fseek(f, 18, SEEK_SET); //Pozitionam in Header
+    fread(&w, sizeof(ui), 1, f); //Citim Latimea Imaginii
+    fread(&h, sizeof(ui), 1, f); //Citim Inaltimea Imaginii
+
+    //Calculam Paddingul
+    if(w%4!=0) padding=4-(3*w)%4;
+    else padding=0;
+
+    n=w*h; //Nr de Elemente al Vectorului de Liniarizare
+    L=(Pixel*)malloc(n*sizeof(Pixel)); //Vectorul de Pixeli declarat Dinamic
+
+    fseek(f, 54, SEEK_SET); //Pozitionam la inceputul imaginii (skip header)
+    for(i=0; i<h; i++)
+    {
+        for(j=0; j<w; j++)
+        {
+            fread(&aux, sizeof(Pixel), 1, f);
+            z=(h-1-i)*w+j; //Pozitia Corecta in Vectorul de Liniarizare
+            L[z]=aux;
+        }
+        fseek(f, padding, SEEK_CUR); //Skip Padding
+    }
+    fclose(f);
+    return L;
+}
+
+//Punct 3: Transformare in Imagine dintr-un Vector de Pixeli(Liniarizat)
+void Imagine(char *destinatie, Pixel L[], uc header[], ui h, ui w, ui padding)
+{
+    FILE *f=fopen(destinatie, "wb");
+    fwrite(header, 54, 1, f); //Copiem Headerul Imaginii Initiale
+    ui i, j, k, z;
+    Pixel aux;
+    uc c=0; //Pt Padding
+
+    //Cream Noua Imagine
+    for(i=0; i<h; i++)
+    {
+        for(j=0; j<w; j++)
+        {
+            z=(h-1-i)*w+j; //Pozitia Corecta in Imaginea Finala
+            aux=L[z];
+            fwrite(&aux, sizeof(Pixel), 1, f);
+        }
+        for(k=0; k<padding; k++) //Punem Octetii de Padding
+            fwrite(&c, 1, 1, f);
+    }
+    fclose(f);
+}
+
+//Punct 4: Criptare Imagine
+//Functie care genereaza o Permutare pornind de la Vectorul cu Nr Generate Aleator
+ui *permutare(ui w, ui h, ui R[]) //Generare Permutare - Algoritm Durstenfeld
+{
+    ui n=w*h, i, j=1, rand, aux, *p;
+    p=(ui*)malloc(n*sizeof(ui)); //Declarare Dinamic cu n Elemente
+    for(i=0; i<n; i++)
+        p[i]=i; //Initializam Permutarea (1, 2, 3, ..., n)
+    //cu j parcurgem R; R[0]=seed=cheia secreta; sarim peste acest element
+    for(i=n-1; i>0; i--)
+    {
+        rand=R[j]%(i+1); //Generare Nr Random
+        j++; //Indice pentru Numerele Aleatoare Generate cu functia XORSHIFT32
+        aux=p[rand]; p[rand]=p[i]; p[i]=aux; //Interschimbare
+    }
+    return p; //permutare
+}
+//Pentru a accesa fiecare Octet dintr-un "int" pe 32 de biti (4 Octeti)
+union Intreg32
+{
+    ui x; //Valoarea Citita
+    struct //Fiecare Octet
+    {
+        uc Octet0;
+        uc Octet1;
+        uc Octet2;
+        uc Octet3;
+    }
+};
+//XOR-area a 2 Pixeli pentru fiecare canal de Culoare (Pentru Codificare)
+Pixel P_XOR_P(Pixel P1, Pixel P2) //P1^P2 (XOR)
+{
+    Pixel P;
+    P.B=P1.B^P2.B;
+    P.G=P1.G^P2.G;
+    P.R=P1.R^P2.R;
+    return P;
+}
+//XOR-area a unui Pixel si a unui Nr Intreg (Pentru Codificare)
+Pixel P_XOR_Nr(Pixel P1, union Intreg32 SV) //P1^Nr (XOR)
+{
+    Pixel P;
+    P.B=P1.B^SV.Octet0;
+    P.G=P1.G^SV.Octet1;
+    P.R=P1.R^SV.Octet2;
+    return P;
+}
+//Functia de Criptare a Imaginii Sursa
+//In Destinatie se va salva Imaginea Criptata
+void criptare(char *sursa, char *destinatie, char *fisier_txt)
+{
+    ui seed; //Cheia Secreta=R[0]
+    union Intreg32 SV; //Starting Value pt Codificare din fisier_txt (a 2-a val)
+    FILE *f=fopen(fisier_txt, "r"); //Deschidem Fisierul Secret
+    if(f==NULL)
+    {printf("Nu am gasit Fisierul Text. Eroare."); return;}
+    fscanf(f, "%u%u", &seed, &SV); //Citim seed si SV
+    fclose(f);
+
+    FILE *f_sursa=fopen(sursa, "rb"); //Deschidem Imaginea Sursa
+    if(f_sursa==NULL)
+   	{printf("Nu exista Imaginea Sursa. Eroare."); return;}
+
+   	//Copiem Header
+   	uc *header;
+    header=(uc*)malloc(54); //Header Dinamic
+   	fread(header, sizeof(uc), 54, f_sursa);
+
+    ui w, h, padding, n, i;
+   	w=*(ui*)&header[18]; //Latimea Imaginii
+   	h=*(ui*)&header[22]; //Inaltimea Imaginii
+   	n=w*h; //Nr Pixeli
+   	//Calculam Paddingul
+    if(w%4!=0) padding=4-(3*w)%4;
+    else padding=0;
+
+    ui *R=XORSHIFT32(w, h, seed); //Vectorul cu Nr Generate Aleator
+    ui *Permutare=permutare(w, h, R); //Permutarea pt Criptare
+
+    Pixel *L, *L_perm;
+    L=liniarizare(sursa); //Imaginea Liniarizata
+    L_perm=(Pixel*)malloc(n*sizeof(Pixel)); //Imaginea Liniarizata Permutata
+    for(i=0; i<n; i++)
+        L_perm[Permutare[i]]=L[i]; //Obtinem Imaginea Liniarizata Permutata
+    free(L); //Dezalocam Memoria pt Vectorul de Liniarizare
+    free(Permutare); //Dezalocam Memoria pt Vectorul de Permutare
+
+    //Imaginea Criptata
+    for(i=0; i<n; i++)
+    {
+        if(i==0)
+        {
+            L_perm[0]=P_XOR_Nr(L_perm[0], SV);
+            SV.x=R[n];
+            L_perm[0]=P_XOR_Nr(L_perm[0], SV);
+        }
+        else
+        {
+            L_perm[i]=P_XOR_P(L_perm[i-1], L_perm[i]);
+            SV.x=R[n+i];
+            L_perm[i]=P_XOR_Nr(L_perm[i], SV);
+        }
+    }
+    //Creeaza Imaginea Criptata pornind de la cea Originala
+    Imagine(destinatie, L_perm, header, h, w, padding);
+
+    free(R); //Dezalocam Memoria
+    free(L_perm); //Dezalocam Memoria
+    free(header); //Dezalocam Memoria
+    fclose(f_sursa);
+}
+
+//Punct 5: Decriptare Imagine
+void decriptare(char *sursa, char *imag_decriptata, char *fisier_txt)
+{
+    ui seed; //Cheia Secreta=R[0]
+    union Intreg32 SV, aux; //Starting Value pt Decodificare
+    FILE *f=fopen(fisier_txt, "r"); //Deschidem Fisierul Secret
+    if(f==NULL)
+    {printf("Nu am gasit Fisierul Text. Eroare."); return;}
+    fscanf(f, "%u%u", &seed, &SV); //Citim seed si SV
+    fclose(f);
+    aux=SV;
+
+    FILE *f_sursa=fopen(sursa, "rb");
+    if(f_sursa==NULL)
+    {printf("Nu exista Imaginea Criptata Sursa. Eroare."); return;}
+
+    //Copiem Header
+   	uc *header;
+    header=(uc*)malloc(54); //Header Dinamic
+   	fread(header, sizeof(uc), 54, f_sursa);
+
+    ui w, h, padding, n;
+    int i;
+   	w=*(ui*)&header[18]; //Latimea Imaginii
+   	h=*(ui*)&header[22]; //Inaltimea Imaginii
+   	n=w*h; //Nr Pixeli
+   	//Calculam Paddingul
+    if(w%4!=0) padding=4-(3*w)%4;
+    else padding=0;
+
+    ui *R=XORSHIFT32(w, h, seed); //Vectorul cu Nr Generate Aleator
+    ui *Permutare=permutare(w, h, R); //Permutare Initiala de la Criptare
+
+    //Calcul Inversa Permutarii (pentru Decriptare)
+    ui *perm_inv=(ui*)malloc(n*sizeof(ui));
+    for(i=0; i<n; i++)
+        perm_inv[Permutare[i]]=i;
+    free(Permutare); //Dezaloc Memoria
+
+    //Liniarizare Imagine Criptata
+    Pixel *C=liniarizare(sursa);
+
+    //Intoarcem Pixelii la Valorile Initiale
+    for(i=n-1; i>=0; i--)
+    {
+        if(i==0)
+        {
+            //Aux pt ca SV isi pierde val initiala deoarece ia valorile Pixelilor de la coada spre inceput
+            C[0]=P_XOR_Nr(C[0], aux);
+            SV.x=R[n+i];
+            C[0]=P_XOR_Nr(C[0], SV);
+        }
+        else
+        {
+            C[i]=P_XOR_P(C[i-1], C[i]);
+            SV.x=R[n+i];
+            C[i]=P_XOR_Nr(C[i], SV);
+        }
+    }
+
+    //Decriptare
+    Pixel *D=(Pixel*)malloc(n*sizeof(Pixel));
+    for(i=0; i<n; i++)
+        D[perm_inv[i]]=C[i];
+
+    //Returnam Imaginea Decriptata
+    Imagine(imag_decriptata, D, header, h, w, padding);
+
+    free(C); //Dezaloc Memoria
+    free(header); //Dezaloc Memoria
+    free(R); //Dezaloc Memoria
+    free(perm_inv); //Dezaloc Memoria
+    free(D); //Dezaloc Memoria
+    fclose(f);
+}
+
+//Punct 6: Histograma Culorilor - Testul chi-patrat
+void histrograma(char *sursa)
+{
+    FILE *f=fopen(sursa, "rb"); //Deschidem Imaginea Sursa
+    if(sursa==NULL)
+   	{printf("Nu exista Imaginea Sursa pentru Textul x-patrat. Eroare."); return;}
+
+   	ui w, h, n, i;
+   	fseek(f, 18, SEEK_SET);
+    fread(&w, sizeof(ui), 1, f); //Latimea Imaginii
+    fread(&h, sizeof(ui), 1, f); //Inaltimea Imaginii
+   	n=w*h; //Nr Pixeli
+   	float f0=(float)n/256; //Frecventa Estimata
+
+   	Pixel *L=liniarizare(sursa); //Imaginea Liniarizata
+   	fclose(f); //Inchidem Imaginea
+
+   	double x=0, aux;
+   	ui *frecv; //Vectori de Frecventa
+   	frecv=(ui*)malloc(256*sizeof(ui)); //Alocam Dinamic
+   	for(i=0; i<256; i++) frecv[i]=0; //Initializam cu 0
+   	for(i=0; i<n; i++) //Calculam Frecventa Red
+        frecv[L[i].R]++;
+    for(i=0; i<256; i++)
+    {
+        aux=(double)frecv[i]-f0;
+        aux=(double)aux*aux;
+        aux=(double)aux/f0;
+        x=(double)x+aux;
+    }
+    printf("Red: %.2f\n", x); //Afisare Red
+
+    x=0;
+    for(i=0; i<256; i++) frecv[i]=0; //Initializam cu 0
+   	for(i=0; i<n; i++) //Calculam Frecventa Green
+        frecv[L[i].G]++;
+    for(i=0; i<256; i++)
+    {
+        aux=(double)frecv[i]-f0;
+        aux=(double)aux*aux;
+        aux=(double)aux/f0;
+        x=(double)x+aux;
+    }
+    printf("Green: %.2f\n", x); //Afisare Green
+
+    x=0;
+    for(i=0; i<256; i++) frecv[i]=0; //Initializam cu 0
+   	for(i=0; i<n; i++) //Calculam Frecventa Blue
+        frecv[L[i].B]++;
+    for(i=0; i<256; i++)
+    {
+        aux=(double)frecv[i]-f0;
+        aux=(double)aux*aux;
+        aux=(double)aux/f0;
+        x=(double)x+aux;
+    }
+    printf("Blue: %.2f\n", x); //Afisare Blue
+
+    free(L); //Dezaloc Memoria
+   	free(frecv); //Dezaloc Memoria
+}
+
+int main()
+{
+    //Prima Parte: Criptarea
+    char nume_img_originala[101];
+    char nume_img_criptata[101];
+    char nume_img_decriptata[101];
+    char fisier_secret[101];
+
+    printf("Numele Imaginii care se doreste Criptata: ");
+    fgets(nume_img_originala, 101, stdin);
+    nume_img_originala[strlen(nume_img_originala)-1]='\0';
+    fflush(stdin);
+
+    printf("Numele Imaginii Criptate: ");
+    fgets(nume_img_criptata, 101, stdin);
+    nume_img_criptata[strlen(nume_img_criptata)-1]='\0';
+    fflush(stdin);
+
+    printf("Numele Imaginii Decriptate: ");
+    fgets(nume_img_decriptata, 101, stdin);
+    nume_img_decriptata[strlen(nume_img_decriptata)-1]='\0';
+    fflush(stdin);
+
+    printf("Numele Fisier care Contine Cheia de Criptare: ");
+    fgets(fisier_secret, 101, stdin);
+    fisier_secret[strlen(fisier_secret)-1]='\0';
+    fflush(stdin);
+
+    criptare(nume_img_originala, nume_img_criptata, fisier_secret);
+    decriptare(nume_img_criptata, nume_img_decriptata, fisier_secret);
+    printf("Valori Test Chi-Patrat pentru Poza Originala:\n");
+    histrograma(nume_img_originala);
+    printf("\nValori Test Chi-Patrat pentru Poza Criptata:\n");
+    histrograma(nume_img_criptata);
+
+    return 0;
+}
