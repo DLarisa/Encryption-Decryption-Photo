@@ -1,5 +1,5 @@
 # Encryption Decryption Photo Algorithm
-This program encrypts/decrypts a .bmp photo using a secret_key from a .txt file and performs the chi-test.
+This program encrypts/decrypts a .bmp photo using a secret_key from a .txt file and performs the chi-squared test.
 
 ## The First Part: Encryption
 The program receives the name for the .bmp image, the name for the encrypted one and the .txt file which contains the secret key.
