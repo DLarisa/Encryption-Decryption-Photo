@@ -27,3 +27,5 @@ The program receives the name for the encrypted image, the name for the decrypte
 
 ## The Third Part: The chi-square Test
 The chi-squared test is used to determine whether there is a statistically significant difference between the expected frequencies and the observed frequencies in one or more categories of a so-called contingency table.
+![3](https://user-images.githubusercontent.com/56414737/75373862-caae8480-58d3-11ea-8abf-0d7ec90a3dc2.jpg)
+
